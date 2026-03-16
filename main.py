@@ -1,4 +1,4 @@
-```python
+
 import streamlit as st
 import fitz
 from sentence_transformers import SentenceTransformer
@@ -114,4 +114,3 @@ if uploaded_file is not None:
                 file,
                 file_name="mindmap.jpg"
             )
-```
