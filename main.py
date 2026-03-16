@@ -1,234 +1,117 @@
+```python
 import streamlit as st
 import fitz
-import numpy as np
 from sentence_transformers import SentenceTransformer
 import faiss
 from transformers import pipeline
 from graphviz import Digraph
-import tempfile
 
-# -----------------------------
-# Page Config
-# -----------------------------
+st.title("AI Research Paper Summarizer")
 
-st.set_page_config(
-    page_title="AI Research Paper Summarizer",
-    page_icon="📄",
-    layout="wide"
-)
+# Load models
+embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+summarizer = pipeline("summarization", model="facebook/bart-large-cnn")
 
-# -----------------------------
-# Title
-# -----------------------------
-
-st.title("📄 AI Research Paper Summarizer")
-st.write("Upload a research paper to generate a **structured summary and mind map**.")
-
-st.divider()
-
-# -----------------------------
-# Models (load once)
-# -----------------------------
-
-@st.cache_resource
-def load_models():
-    embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-    summarizer = pipeline(
-        "summarization",
-        model="facebook/bart-large-cnn"
-    )
-    return embed_model, summarizer
+# Upload PDF
+uploaded_file = st.file_uploader("Upload Research Paper (PDF)", type="pdf")
 
 
-embed_model, summarizer = load_models()
-
-# -----------------------------
-# PDF Text Extraction
-# -----------------------------
-
-def extract_text(uploaded_file):
-
-    doc = fitz.open(stream=uploaded_file.read(), filetype="pdf")
+def extract_text(pdf):
+    doc = fitz.open(stream=pdf.read(), filetype="pdf")
     text = ""
-
     for page in doc:
         text += page.get_text()
-
     return text
 
 
-# -----------------------------
-# Section Detection
-# -----------------------------
-
 def detect_sections(text):
-
     sections = text.split("\n\n")
-
     return sections
 
 
-# -----------------------------
-# Chunking
-# -----------------------------
-
 def chunk_text(text, size=500):
-
     words = text.split()
     chunks = []
-
     for i in range(0, len(words), size):
-        chunk = " ".join(words[i:i+size])
+        chunk = " ".join(words[i:i + size])
         chunks.append(chunk)
-
     return chunks
 
 
-# -----------------------------
-# Retrieve Important Chunks
-# -----------------------------
-
-def retrieve_chunks(chunks):
-
-    embeddings = embed_model.encode(chunks)
-
-    dim = embeddings.shape[1]
-
-    index = faiss.IndexFlatL2(dim)
-
-    index.add(np.array(embeddings))
-
-    query = embed_model.encode(["main research contribution"])
-
-    D, I = index.search(np.array(query), 10)
-
-    important_chunks = [chunks[i] for i in I[0]]
-
-    return important_chunks
-
-
-# -----------------------------
-# Hierarchical Summarization
-# -----------------------------
-
 def summarize_chunks(chunks):
-
     summaries = []
-
-    for chunk in chunks:
-
-        summary = summarizer(
-            chunk,
-            max_length=120,
-            min_length=40,
-            do_sample=False
-        )[0]["summary_text"]
-
-        summaries.append(summary)
-
+    for chunk in chunks[:10]:
+        result = summarizer(chunk, max_length=120, min_length=40, do_sample=False)
+        summaries.append(result[0]['summary_text'])
     return summaries
 
 
-def final_summary(chunk_summaries):
-
-    combined = " ".join(chunk_summaries)
-
-    summary = summarizer(
-        combined,
-        max_length=200,
-        min_length=80,
-        do_sample=False
-    )[0]["summary_text"]
-
-    return summary
-
-
-# -----------------------------
-# Mind Map Generation
-# -----------------------------
-
-def generate_mindmap(summary):
-
+def create_mindmap():
     dot = Digraph()
-
     dot.node("Paper")
+    dot.node("Problem")
+    dot.node("Method")
+    dot.node("Results")
+    dot.node("Conclusion")
 
-    nodes = [
-        "Problem",
-        "Method",
-        "Results",
-        "Conclusion"
-    ]
+    dot.edge("Paper", "Problem")
+    dot.edge("Paper", "Method")
+    dot.edge("Paper", "Results")
+    dot.edge("Paper", "Conclusion")
 
-    for n in nodes:
-        dot.node(n)
-        dot.edge("Paper", n)
+    dot.render("mindmap", format="jpg", cleanup=True)
 
-    tmp = tempfile.NamedTemporaryFile(delete=False)
-
-    path = dot.render(tmp.name, format="png")
-
-    return path
-
-
-# -----------------------------
-# Upload Section
-# -----------------------------
-
-uploaded_file = st.file_uploader(
-    "Upload Research Paper (PDF)",
-    type="pdf"
-)
-
-# -----------------------------
-# Processing
-# -----------------------------
 
 if uploaded_file is not None:
 
-    if st.button("Generate Summary & Mind Map"):
+    if st.button("Generate Summary"):
 
-        with st.spinner("Processing research paper..."):
+        # Extract text
+        text = extract_text(uploaded_file)
 
-            # Extract
-            text = extract_text(uploaded_file)
+        # Section detection
+        sections = detect_sections(text)
 
-            # Section detection
-            sections = detect_sections(text)
+        # Chunking
+        chunks = chunk_text(text)
 
-            # Chunking
-            chunks = chunk_text(text)
+        # Embeddings (FIX: now chunks exists before this line)
+        embeddings = embedding_model.encode(chunks)
 
-            # Retrieval
-            important_chunks = retrieve_chunks(chunks)
+        # FAISS index
+        dimension = embeddings.shape[1]
+        index = faiss.IndexFlatL2(dimension)
+        index.add(embeddings)
 
-            # Summaries
-            chunk_summaries = summarize_chunks(important_chunks)
+        # Retrieve important chunks
+        query_embedding = embedding_model.encode(["main research contribution"])
+        D, I = index.search(query_embedding, 5)
 
-            summary = final_summary(chunk_summaries)
+        important_chunks = [chunks[i] for i in I[0]]
 
-            # Mindmap
-            mindmap_path = generate_mindmap(summary)
+        # Summarization
+        summaries = summarize_chunks(important_chunks)
 
-        st.success("Analysis Complete!")
+        final_summary = "\n\n".join(summaries)
 
-        st.subheader("📑 Final Summary")
+        # Create mind map
+        create_mindmap()
 
-        st.write(summary)
+        st.subheader("Final Summary")
+        st.write(final_summary)
 
-        st.subheader("🧠 Mind Map")
-
-        st.image(mindmap_path)
-
+        # Download summary
         st.download_button(
             "Download Summary",
-            summary,
+            final_summary,
             file_name="summary.txt"
         )
 
-        with open(mindmap_path, "rb") as f:
+        # Download mindmap
+        with open("mindmap.jpg", "rb") as file:
             st.download_button(
                 "Download Mind Map",
-                f,
-                file_name="mindmap.png"
+                file,
+                file_name="mindmap.jpg"
             )
+```
